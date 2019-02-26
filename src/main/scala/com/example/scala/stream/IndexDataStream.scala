@@ -20,7 +20,8 @@ class IndexDataStream(implicit system: ActorSystem) {
   // Need this for futures
   implicit val executionContext: ExecutionContext = materializer.executionContext
 
-  def streamIndexData(eventIndex: EventIndex) ={
+  def streamIndexData(eventIndex: EventIndex) = {
+    if(eventIndex.eventId == 9) Thread.sleep(5000)
     Source(1 to 15).runForeach(id => log.info(s"Processing Event Index in IndexDataStream: ${eventIndex.eventId}, indexId: ${eventIndex.indexId}, id: ${id}"))
   }
 
