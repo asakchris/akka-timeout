@@ -25,6 +25,7 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
     private final List<EventIndex> inProgressEventIndices;
     private final Queue<ActorRef> pendingCoordinatorMessages;
     private final IndexDataStream indexDataStream;
+    private final long timeout;
 
     @Override
     public Receive createReceive() {
@@ -38,7 +39,8 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
                 .build();
     }
 
-    public EventIndexWorkerActor() {
+    public EventIndexWorkerActor(long timeout) {
+        this.timeout = timeout;
         inProgressEventsMap = new HashMap<>();
         pendingCoordinatorMessages = new LinkedList<>();
         inProgressEventIndices = new ArrayList<>();
@@ -56,7 +58,7 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
         this.inProgressEventIndices.add(eventIndex);
 
         // Schedule timeout message to monitor this event index progress
-        context().system().scheduler().scheduleOnce(Duration.ofSeconds(5), self(), new Timeout(eventIndex), context().system().dispatcher(), ActorRef.noSender());
+        context().system().scheduler().scheduleOnce(Duration.ofSeconds(timeout), self(), new Timeout(eventIndex), context().system().dispatcher(), ActorRef.noSender());
 
         // Invoke IndexDataStream to send data to Kafka
         indexDataStream.runStreamIndexData(eventIndex, self());
@@ -138,8 +140,8 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
         }
     }
 
-    public static Props props() {
-        return Props.create(EventIndexWorkerActor.class, () -> new EventIndexWorkerActor());
+    public static Props props(long timeout) {
+        return Props.create(EventIndexWorkerActor.class, () -> new EventIndexWorkerActor(timeout));
     }
 
     public static class Timeout {
