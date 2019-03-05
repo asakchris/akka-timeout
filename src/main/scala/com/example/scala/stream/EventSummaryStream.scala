@@ -14,6 +14,8 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
 
 class EventSummaryStream(implicit system: ActorSystem, eventDetailActor: ActorRef) {
   private val log = LoggerFactory.getLogger(getClass)
+  private var start = 1L
+  private var end = 20L
 
   val decider: Supervision.Decider = {
     case _ => Supervision.stop
@@ -27,10 +29,11 @@ class EventSummaryStream(implicit system: ActorSystem, eventDetailActor: ActorRe
   def eventSummaryFlow(): Future[Integer] = {
     val promise = Promise[Integer]()
     log.info("**************************** About to send Event Summary for processing ****************************************")
-    Source(1 to 20)
+    Source(start to end)
       .map(id => EventDetail(id))
       .runWith(Sink.actorRefWithAck(eventDetailActor, onInitMessage = new StreamInitialized(promise), ackMessage = Ack.INSTANCE,
         onCompleteMessage = new StreamCompleted(), onFailureMessage = (ex: Throwable) => new StreamFailure(ex)))
+    start = end + 1; end = end + 20
     promise.future
   }
 

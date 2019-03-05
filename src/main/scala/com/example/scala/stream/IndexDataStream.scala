@@ -1,12 +1,13 @@
 package com.example.scala.stream
 
+import akka.Done
 import akka.actor.{ActorRef, ActorSystem}
 import akka.stream.scaladsl.Source
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import com.example.scala.messages.EventIndex
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 
 class IndexDataStream(implicit system: ActorSystem) {
   private val log = LoggerFactory.getLogger(getClass)
@@ -15,15 +16,18 @@ class IndexDataStream(implicit system: ActorSystem) {
     case _ => Supervision.stop
   }
 
-  implicit val materializer = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
+  implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
 
   // Need this for futures
   implicit val executionContext: ExecutionContext = materializer.executionContext
 
-  def streamIndexData(eventIndex: EventIndex) = {
-    if(eventIndex.eventId == 9) Thread.sleep(5000)
-    Source(1 to 15).runForeach(id => log.info(s"Processing Event Index in IndexDataStream: ${eventIndex.eventId}, indexId: ${eventIndex.indexId}, id: ${id}"))
-  }
+  def streamIndexData(eventIndex: EventIndex): Future[Done] = for {
+    _ <- {
+      if(eventIndex.eventId % 9 == 0 && eventIndex.indexId == 1) Thread.sleep(30000)
+      Future[Int](0)
+    }
+    processor <- Source(1 to 15).runForeach(id => log.info(s"Processing Event Index in IndexDataStream: ${eventIndex.eventId}, indexId: ${eventIndex.indexId}, id: ${id}"))
+  } yield processor
 
   def runStreamIndexData(eventIndex: EventIndex, actor: ActorRef) = {
     streamIndexData(eventIndex).map(_ => actor.tell(IndexDataStreamResponse(eventIndex), actor))

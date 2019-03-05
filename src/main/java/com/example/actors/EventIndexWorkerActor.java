@@ -3,6 +3,7 @@ package com.example.actors;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
+import com.example.common.AppConstants;
 import com.example.messages.AreYouFree;
 import com.example.messages.IAmFree;
 import com.example.messages.SchedulerMessage;
@@ -11,16 +12,17 @@ import com.example.scala.future.EventIndexUpdateResponse;
 import com.example.scala.messages.EventIndex;
 import com.example.scala.stream.IndexDataStream;
 import com.example.scala.stream.IndexDataStreamResponse;
+import scala.Option;
 
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.Map;
-import java.util.Queue;
+import java.util.*;
 
 public class EventIndexWorkerActor extends AbstractLoggingActor {
     private boolean isEventIndexInProgress;
+    // All in-progress event indices stored in this map and will be removed after streaming index data and event index status update
     private final Map<EventIndex, ActorRef> inProgressEventsMap;
+    // All in-progress event indices stored in this list and will be removed after streaming index data
+    private final List<EventIndex> inProgressEventIndices;
     private final Queue<ActorRef> pendingCoordinatorMessages;
     private final IndexDataStream indexDataStream;
 
@@ -32,12 +34,14 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
                 .match(IndexDataStreamResponse.class, this::processIndexDataStreamResponse)
                 .match(EventIndexUpdateResponse.class, this::processEventIndexUpdateResponse)
                 .match(SchedulerMessage.class, this::processPendingBroadcastMessages)
+                .match(Timeout.class, this::processTimeoutMessage)
                 .build();
     }
 
     public EventIndexWorkerActor() {
         inProgressEventsMap = new HashMap<>();
         pendingCoordinatorMessages = new LinkedList<>();
+        inProgressEventIndices = new ArrayList<>();
         context().system().scheduler().schedule(Duration.ofSeconds(10), Duration.ofSeconds(1), self(), SchedulerMessage.INSTANCE, context().system().dispatcher(), self());
         this.indexDataStream = new IndexDataStream(context().system());
     }
@@ -49,6 +53,10 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
 
         // Store the sender who is event index actor to respond later after processing
         this.inProgressEventsMap.put(eventIndex, getSender());
+        this.inProgressEventIndices.add(eventIndex);
+
+        // Schedule timeout message to monitor this event index progress
+        context().system().scheduler().scheduleOnce(Duration.ofSeconds(5), self(), new Timeout(eventIndex), context().system().dispatcher(), ActorRef.noSender());
 
         // Invoke IndexDataStream to send data to Kafka
         indexDataStream.runStreamIndexData(eventIndex, self());
@@ -57,9 +65,35 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
     private void processIndexDataStreamResponse(IndexDataStreamResponse streamResponse) {
         log().info("Event index worker received IndexDataStreamResponse message from IndexDataStream: {}, indexId: {}", streamResponse.eventIndex().eventId(), streamResponse.eventIndex().indexId());
 
-        // Update event index status
+        // Check if event index exists in in-progress list, if it doesn't then, it is already timed out, so we can ignore it
+        boolean isEventIndexExist = this.inProgressEventIndices.remove(streamResponse.eventIndex());
+        if(isEventIndexExist) {
+            updateEventIndexStatus(streamResponse.eventIndex(), AppConstants.ProcessingStatus.SUCCESSFUL, null);
+        } else {
+            log().warning("Event index processing completed after timeout, so ignoring it: {}, indexId: {}", streamResponse.eventIndex().eventId(), streamResponse.eventIndex().indexId());
+        }
+    }
+
+    private void updateEventIndexStatus(EventIndex eventIndex, int status, String errorMessage) {
         EventIndexUpdate eventIndexUpdate = new EventIndexUpdate(context().system());
-        eventIndexUpdate.execute(streamResponse.eventIndex(), 8, self());
+        eventIndexUpdate.execute(eventIndex, status, Option.apply(errorMessage), self());
+    }
+
+    /**
+     * This actor receives Timeout if IndexDataStream didn't send response message after configured timeout
+     * It updates event index status as failure and proceed
+     */
+    private void processTimeoutMessage(Timeout timeout) {
+        log().debug("Event index worker received Timeout message: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+
+        // Check if event index exists in in-progress list, if it doesn't then, it didn't timeout, which means it already received response from IndexDataStream, so we can ignore this message
+        boolean isEventIndexExist = this.inProgressEventIndices.remove(timeout.getEventIndex());
+        if(isEventIndexExist) {
+            log().info("Event index processing timed out, so failing it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+            updateEventIndexStatus(timeout.getEventIndex(), AppConstants.ProcessingStatus.FAILED, "Event index processing timed out");
+        } else {
+            log().debug("Event index processing completed before timeout, so ignoring it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+        }
     }
 
     private void respondToBroadcast(AreYouFree free) {
@@ -106,5 +140,17 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
 
     public static Props props() {
         return Props.create(EventIndexWorkerActor.class, () -> new EventIndexWorkerActor());
+    }
+
+    public static class Timeout {
+        private final EventIndex eventIndex;
+
+        public Timeout(EventIndex eventIndex) {
+            this.eventIndex = eventIndex;
+        }
+
+        public EventIndex getEventIndex() {
+            return eventIndex;
+        }
     }
 }
