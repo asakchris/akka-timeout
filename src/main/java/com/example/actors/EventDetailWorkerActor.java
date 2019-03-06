@@ -20,8 +20,8 @@ public class EventDetailWorkerActor extends AbstractLoggingActor {
     private EventDetail eventDetail;
     private final EventIndexStream eventIndexStream;
 
-    public EventDetailWorkerActor(ActorRef eventIndexWorkerRouter) {
-        eventIndexActor = getContext().actorOf(EventIndexActor.props(eventIndexWorkerRouter), "event-index-coordinator-" + self().path().name());
+    public EventDetailWorkerActor(ActorRef eventIndexWorkerRouter, long eventIndexTimeout) {
+        eventIndexActor = getContext().actorOf(EventIndexActor.props(eventIndexWorkerRouter, eventIndexTimeout), "event-index-coordinator-" + self().path().name());
         eventIndexStream = new EventIndexStream(context().system(), eventIndexActor, getSelf());
     }
 
@@ -93,7 +93,7 @@ public class EventDetailWorkerActor extends AbstractLoggingActor {
         this.eventDetail = null;
     }
 
-    public static Props props(ActorRef eventIndexWorkerRouter) {
-        return Props.create(EventDetailWorkerActor.class, () -> new EventDetailWorkerActor(eventIndexWorkerRouter));
+    public static Props props(ActorRef eventIndexWorkerRouter, long eventIndexTimeout) {
+        return Props.create(EventDetailWorkerActor.class, () -> new EventDetailWorkerActor(eventIndexWorkerRouter, eventIndexTimeout));
     }
 }

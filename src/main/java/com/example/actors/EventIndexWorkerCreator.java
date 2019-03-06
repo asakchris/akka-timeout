@@ -14,7 +14,7 @@ public class EventIndexWorkerCreator extends AbstractLoggingActor {
 
     @Override
     public void preStart() {
-        long timeout = context().system().settings().config().getLong("event.timeout-sec.event-detail-worker");
+        long timeout = context().system().settings().config().getLong("event.timeout-sec.event-index-worker");
         log().info("EventIndexWorkerActor actor timeout: {}", timeout);
         IntStream
                 .rangeClosed(1, noOfWorkers)

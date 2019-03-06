@@ -6,15 +6,20 @@ import akka.actor.Props;
 import akka.routing.Broadcast;
 import com.example.common.AppConstants;
 import com.example.messages.*;
+import com.example.scala.future.EventIndexUpdate;
+import com.example.scala.future.EventIndexUpdateResponse;
 import com.example.scala.messages.EventIndex;
+import scala.Option;
 
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 public class EventIndexActor extends AbstractLoggingActor {
     private Integer count = 0;
     private final ActorRef eventIndexWorkerRouter;
+    // In-progress event index list
     private final List<EventIndex> eventIndexList;
     private boolean isStreamCompleted;
     // Stream which sends message to event index actor
@@ -22,10 +27,12 @@ public class EventIndexActor extends AbstractLoggingActor {
     // Event detail worker actor who creates event index stream, when all indices are processed for this event, then response should be sent to this actor
     private ActorRef eventDetailWorkerActor;
     private EventIndex eventIndex;
+    private final long timeout;
 
-    public EventIndexActor(ActorRef eventIndexWorkerRouter) {
+    public EventIndexActor(ActorRef eventIndexWorkerRouter, long timeout) {
         eventIndexList = new ArrayList<>();
         this.eventIndexWorkerRouter = eventIndexWorkerRouter;
+        this.timeout = timeout;
     }
 
     @Override
@@ -37,6 +44,8 @@ public class EventIndexActor extends AbstractLoggingActor {
                 .match(StreamResponse.StreamFailure.class, this::processStreamFailureMessage)
                 .match(IAmFree.class, this::processBroadcastResponse)
                 .match(WorkerResponse.class, this::processWorkerResponse)
+                .match(Timeout.class, this::processTimeoutMessage)
+                .match(EventIndexUpdateResponse.class, this::processEventIndexUpdateResponse)
                 .build();
     }
 
@@ -94,6 +103,9 @@ public class EventIndexActor extends AbstractLoggingActor {
         // Send event index message to the free worker if it is not processed by any other worker
         // Since it is broadcast message, multiple worker may send I am free message, but only one message to process
         if(this.eventIndex != null) {
+            // Schedule timeout message to monitor this event index progress
+            context().system().scheduler().scheduleOnce(Duration.ofSeconds(timeout), self(), new Timeout(eventIndex), context().system().dispatcher(), ActorRef.noSender());
+
             log().info("About to send event index to worker: {}, indexId: {}", eventIndex.eventId(), eventIndex.indexId());
             sender().tell(this.eventIndex, self());
             this.eventIndex = null;
@@ -106,24 +118,77 @@ public class EventIndexActor extends AbstractLoggingActor {
     private void processWorkerResponse(WorkerResponse workerResponse) {
         log().info("EventIndexActor received response from event index worker - {}, indexId: {}", workerResponse.getEventIndex().eventId(), workerResponse.getEventIndex().indexId());
 
-        // Remove processed event index from the list
-        eventIndexList.remove(workerResponse.getEventIndex());
+        // Check if event index exists in in-progress list, if it doesn't then, it is already timed out, so we can ignore it
+        boolean isEventIndexExist = eventIndexList.remove(workerResponse.getEventIndex());
 
-        // Send event index complete message if stream is completed and all events are processed by workers
-        if(isStreamCompleted && eventIndexList.isEmpty()) {
-            log().info("All events for this event detail are processed by event index workers, so sending message to event detail worker actor: {}, count: {}", workerResponse.getEventIndex().eventId(), count);
-            eventDetailWorkerActor.tell(new EventIndexComplete(workerResponse.getEventIndex().eventId(), AppConstants.ProcessingStatus.SUCCESSFUL), getSelf());
+        if(isEventIndexExist) {
+            // Send event index complete message if stream is completed and all events are processed by workers
+            if(isStreamCompleted && eventIndexList.isEmpty()) {
+                log().info("All events for this event detail are processed by event index workers, so sending message to event detail worker actor: {}, count: {}", workerResponse.getEventIndex().eventId(), count);
+                eventDetailWorkerActor.tell(new EventIndexComplete(workerResponse.getEventIndex().eventId(), AppConstants.ProcessingStatus.SUCCESSFUL), getSelf());
+            }
+        } else {
+            log().warning("Event index worker processing completed after timeout, so ignoring it: {}, indexId: {}", workerResponse.getEventIndex().eventId(), workerResponse.getEventIndex().indexId());
         }
     }
 
-    public static Props props(ActorRef eventIndexWorkerRouter) {
-        return Props.create(EventIndexActor.class, () -> new EventIndexActor(eventIndexWorkerRouter));
+    /**
+     * This actor receives Timeout if EventIndexWorkerActor didn't send WorkerResponse message before configured timeout
+     * It updates event index status as failure and proceed
+     */
+    private void processTimeoutMessage(Timeout timeout) {
+        log().debug("Event index actor received Timeout message: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+
+        // Check if event index exists in in-progress list, if it doesn't then, it didn't timeout, which means it already received response from EventIndexWorkerActor, so we can ignore this message
+        boolean isEventIndexExist = this.eventIndexList.remove(timeout.getEventIndex());
+        if(isEventIndexExist) {
+            log().info("Event index worker processing timed out, so failing it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+            updateEventIndexStatus(timeout.getEventIndex(), AppConstants.ProcessingStatus.FAILED, "Event index worker processing timed out");
+        } else {
+            log().debug("Event index worker processing completed before timeout, so ignoring it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+        }
+    }
+
+    private void updateEventIndexStatus(EventIndex eventIndex, int status, String errorMessage) {
+        EventIndexUpdate eventIndexUpdate = new EventIndexUpdate(context().system());
+        eventIndexUpdate.execute(eventIndex, status, Option.apply(errorMessage), self());
+    }
+
+    /**
+     * This actor receives EventIndexUpdateResponse from EventIndexUpdate future after updating event detail status as timed out
+     * It sends EventIndexComplete to EventDetailWorkerActor if all event indices are processed for given event detail
+     */
+    private void processEventIndexUpdateResponse(EventIndexUpdateResponse response) {
+        log().info("Received EventIndexUpdateResponse from EventIndexUpdate future, rows updated: {}, eventId: {}, indexId: {}",
+                response.rows(), response.eventIndex().eventId(), response.eventIndex().indexId());
+
+        // Send event index complete message if stream is completed and all events are processed by workers
+        if(isStreamCompleted && eventIndexList.isEmpty()) {
+            log().info("All events for this event detail are processed with timeout by event index workers, so sending message to event detail worker actor: {}, count: {}", response.eventIndex().eventId(), count);
+            eventDetailWorkerActor.tell(new EventIndexComplete(response.eventIndex().eventId(), AppConstants.ProcessingStatus.SUCCESSFUL), getSelf());
+        }
+    }
+
+    public static Props props(ActorRef eventIndexWorkerRouter, long timeout) {
+        return Props.create(EventIndexActor.class, () -> new EventIndexActor(eventIndexWorkerRouter, timeout));
     }
 
     public static class WorkerResponse implements Serializable {
         private final EventIndex eventIndex;
 
         public WorkerResponse(EventIndex eventIndex) {
+            this.eventIndex = eventIndex;
+        }
+
+        public EventIndex getEventIndex() {
+            return eventIndex;
+        }
+    }
+
+    public static class Timeout {
+        private final EventIndex eventIndex;
+
+        public Timeout(EventIndex eventIndex) {
             this.eventIndex = eventIndex;
         }
 

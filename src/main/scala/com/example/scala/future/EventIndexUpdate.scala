@@ -18,11 +18,11 @@ class EventIndexUpdate(implicit system: ActorSystem) {
     Future { 1 }
   }
 
-  def execute(eventIndex: EventIndex, status: Int, errorMessage: Option[String], eventIndexWorkerActor: ActorRef): Future[Unit] = {
+  def execute(eventIndex: EventIndex, status: Int, errorMessage: Option[String], actorRef: ActorRef): Future[Unit] = {
     log.info(s"Before updateEventIndex status: ${eventIndex.eventId}, indexId: ${eventIndex.indexId}")
     // For Index Level category, update all event index since processing done in bulk
     val dbResult = Future { 1 }
-    dbResult.map(rows => eventIndexWorkerActor.tell(EventIndexUpdateResponse(rows, eventIndex), eventIndexWorkerActor))
+    dbResult.map(rows => actorRef.tell(EventIndexUpdateResponse(rows, eventIndex), actorRef))
   }
 }
 

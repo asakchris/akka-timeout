@@ -23,7 +23,7 @@ class IndexDataStream(implicit system: ActorSystem) {
 
   def streamIndexData(eventIndex: EventIndex): Future[Done] = for {
     _ <- {
-      if(eventIndex.eventId % 9 == 0 && eventIndex.indexId == 1) Thread.sleep(30000)
+      if(eventIndex.eventId % 9 == 0 && eventIndex.indexId == 1) Thread.sleep(150000)
       Future[Int](0)
     }
     processor <- Source(1 to 15).runForeach(id => log.info(s"Processing Event Index in IndexDataStream: ${eventIndex.eventId}, indexId: ${eventIndex.indexId}, id: ${id}"))

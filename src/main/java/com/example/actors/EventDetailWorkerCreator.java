@@ -17,9 +17,12 @@ public class EventDetailWorkerCreator extends AbstractLoggingActor {
 
     @Override
     public void preStart() {
+        long eventIndexTimeout = context().system().settings().config().getLong("event.timeout-sec.event-index-coordinator");
+        log().info("event-index-coordinator actor timeout: {}", eventIndexTimeout);
+
         IntStream
                 .rangeClosed(1, noOfWorkers)
-                .forEach(i -> getContext().actorOf(EventDetailWorkerActor.props(eventIndexWorkerRouter), "edw" + i));
+                .forEach(i -> getContext().actorOf(EventDetailWorkerActor.props(eventIndexWorkerRouter, eventIndexTimeout), "edw" + i));
     }
 
     @Override

@@ -72,7 +72,7 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
         if(isEventIndexExist) {
             updateEventIndexStatus(streamResponse.eventIndex(), AppConstants.ProcessingStatus.SUCCESSFUL, null);
         } else {
-            log().warning("Event index processing completed after timeout, so ignoring it: {}, indexId: {}", streamResponse.eventIndex().eventId(), streamResponse.eventIndex().indexId());
+            log().warning("Index data stream processing completed after timeout, so ignoring it: {}, indexId: {}", streamResponse.eventIndex().eventId(), streamResponse.eventIndex().indexId());
         }
     }
 
@@ -91,10 +91,10 @@ public class EventIndexWorkerActor extends AbstractLoggingActor {
         // Check if event index exists in in-progress list, if it doesn't then, it didn't timeout, which means it already received response from IndexDataStream, so we can ignore this message
         boolean isEventIndexExist = this.inProgressEventIndices.remove(timeout.getEventIndex());
         if(isEventIndexExist) {
-            log().info("Event index processing timed out, so failing it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
-            updateEventIndexStatus(timeout.getEventIndex(), AppConstants.ProcessingStatus.FAILED, "Event index processing timed out");
+            log().info("Index data stream processing timed out, so failing it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+            updateEventIndexStatus(timeout.getEventIndex(), AppConstants.ProcessingStatus.FAILED, "Index data stream processing timed out");
         } else {
-            log().debug("Event index processing completed before timeout, so ignoring it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
+            log().debug("Index data stream processing completed before timeout, so ignoring it: {}, indexId: {}", timeout.getEventIndex().eventId(), timeout.getEventIndex().indexId());
         }
     }
 
